@@ -43,14 +43,20 @@ export interface CanvasInfo {
   chartTitleMargin: number,
   maxItemTitleWidth: number,
   titles: TitleMap,
-  ctx: CanvasRenderingContext2D
+  ctx: CanvasRenderingContext2D,
+  fontSize: number
 }
 
 // The sidebar containing the titles of chart items should only be as
 // wide as the longest title, plus a little bit of margin.
-const getMaxTitleWidth = (chart: Chart, titles: TitleMap, ctx: CanvasRenderingContext2D): number => {
+const getMaxTitleWidth = (
+  chart: Chart,
+  titles: TitleMap,
+  ctx: CanvasRenderingContext2D,
+  fontSize: number
+): number => {
   let maxTitleWidth = 0
-  ctx.font = `16pt ${chart.font ? chart.font : 'monospace'}`
+  ctx.font = `${fontSize}pt ${chart.font ? chart.font : 'monospace'}`
   if (chart.textColor && /^#[0-9A-F]{6}$/i.test(chart.textColor)) {
     ctx.fillStyle = chart.textColor
   } else {
@@ -116,32 +122,6 @@ export const drawCover = (
   )
 }
 
-// Calculate the height required by album titles to make
-// sure that the ones on the bottom don't get cut off if
-// they go below the bottom row of chart items.
-export const getMinimumHeight = (
-  chart: Chart,
-  ctx: CanvasRenderingContext2D,
-  titleMargin: number
-): number => {
-  const itemsInScope = chart.items.slice(0, chart.size.x * chart.size.y)
-
-  ctx.font = `16pt ${chart.font ? chart.font : 'monospace'}`
-
-  let height = (chart.gap * 2) + titleMargin
-
-  for (let i = 0; i < itemsInScope.length; i++) {
-    if (itemsInScope[i]) {
-      height = height + 25
-      if (i % chart.size.x === 0 && i !== 0) {
-        height = height + 25
-      }
-    }
-  }
-
-  return height
-}
-
 export const buildTitles = (chart: Chart): TitleMap => {
   const titles: TitleMap = {}
 
@@ -175,18 +155,34 @@ export const insertTitles = (
 ): void => {
   const itemsInScope = chart.items.slice(0, chart.size.x * chart.size.y)
 
-  canvasInfo.ctx.font = `16pt ${chart.font ? chart.font : 'monospace'}`
+  canvasInfo.ctx.font = `${canvasInfo.fontSize}pt ${chart.font ? chart.font : 'monospace'}`
   canvasInfo.ctx.textAlign = 'left'
   canvasInfo.ctx.lineWidth = 0.3
   canvasInfo.ctx.strokeStyle = 'black'
 
-  // Increment this below with each successive title
-  let currentHeight = canvasInfo.chartTitleMargin + chart.gap
+  // Track where to start a new row
+  let currentCellHeight = canvasInfo.chartTitleMargin + chart.gap + canvasInfo.fontSize
+
+  // Track where to start a new title within each row
+  let currentHeight = canvasInfo.chartTitleMargin + chart.gap + canvasInfo.fontSize
+
+  // How much vertical space to put between titles.
+  // 1.5-spacing seems fine until the chart hits around
+  // 11 items wide, then we use a different method to
+  // squish them in.
+  const verticalMargin = chart.size.x < 11
+    ? canvasInfo.fontSize * 1.5
+    : Math.floor(canvasInfo.cellSize / chart.size.x)
 
   itemsInScope.forEach((item, index) => {
-    // Keep a margin to correspond with rows
-    if (index % chart.size.x === 0 && index !== 0) {
-      currentHeight = currentHeight + 25
+    // Keep an extra margin between each row
+    if (index !== 0) {
+      if (index % chart.size.x === 0) {
+        currentCellHeight = currentCellHeight + canvasInfo.cellSize + chart.gap
+        currentHeight = currentCellHeight
+      } else {
+        currentHeight = currentHeight + verticalMargin
+      }
     }
 
     if (!item) {
@@ -195,17 +191,15 @@ export const insertTitles = (
 
     const titleString = titles[index]
 
-    currentHeight = currentHeight + 25
-
     canvasInfo.ctx.strokeText(
       titleString,
-      canvasInfo.width - canvasInfo.maxItemTitleWidth + 10,
+      canvasInfo.width - canvasInfo.maxItemTitleWidth + 10 - Math.floor(chart.gap / 2),
       currentHeight
     )
 
     canvasInfo.ctx.fillText(
       titleString,
-      canvasInfo.width - canvasInfo.maxItemTitleWidth + 10,
+      canvasInfo.width - canvasInfo.maxItemTitleWidth + 10 - Math.floor(chart.gap / 2),
       currentHeight
     )
   })
@@ -224,11 +218,17 @@ export const setup = (
     throw new Error('Rendering context not found, try reloading!')
   }
 
+  // The original default was 16pt font size with 260px cells.
+  // 260/16.25 is 16, so we divide by 16.25 to preserve the
+  // font size ratio for user-configured cell sizes, rounding
+  // down to the nearest integer for performance reasons.
+  const fontSize = Math.floor(cellSize / 16.25)
+
   let maxItemTitleWidth = 0
   let titles: TitleMap = {}
   if (chart.showTitles) {
     titles = buildTitles(chart)
-    maxItemTitleWidth = getMaxTitleWidth(chart, titles, ctx)
+    maxItemTitleWidth = getMaxTitleWidth(chart, titles, ctx, fontSize)
   }
 
   const chartTitleMargin = chart.title === '' ? 0 : 60
@@ -237,13 +237,6 @@ export const setup = (
     // room for each cell + gap between cells + margins
     x: (chart.size.x * (cellSize + gap)) + gap + maxItemTitleWidth,
     y: (chart.size.y * (cellSize + gap)) + gap + chartTitleMargin
-  }
-
-  if (chart.showTitles) {
-    const minimumHeight = getMinimumHeight(chart, ctx, chartTitleMargin)
-    if (pixelDimensions.y < minimumHeight) {
-      pixelDimensions.y = minimumHeight
-    }
   }
 
   canvas.width = pixelDimensions.x
@@ -256,7 +249,8 @@ export const setup = (
     chartTitleMargin,
     maxItemTitleWidth,
     titles,
-    ctx
+    ctx,
+    fontSize
   }
 }
 
